@@ -138,7 +138,8 @@ export default function EtherealRealms() {
   }, [logs]);
 
   const addLog = (text, type = 'neutral') => {
-    setLogs(prev => [...prev, { text, type, id: Date.now() }]);
+    // 使用 Math.random() 確保即使在同一毫秒內生成多個日誌，ID 也是唯一的
+    setLogs(prev => [...prev, { text, type, id: Date.now() + Math.random() }]);
   };
 
   const addFloatingText = (text, type) => {
@@ -594,7 +595,7 @@ export default function EtherealRealms() {
                log.type === 'warning' ? 'text-yellow-400' : 
                log.type === 'info' ? 'text-blue-300' : 'text-gray-400'
              }`}>
-               <span className="opacity-30 mr-2">[{new Date(log.id).toLocaleTimeString().slice(0,8)}]</span>
+               <span className="opacity-30 mr-2">[{new Date(Number(String(log.id).split('.')[0])).toLocaleTimeString().slice(0,8)}]</span>
                {log.text}
              </div>
           ))}
