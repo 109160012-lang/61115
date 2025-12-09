@@ -1,0 +1,607 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Sword, Shield, Zap, Skull, Heart, Award, 
+  ChevronRight, Sparkles, Flame, Droplets, Ghost,
+  User, Crown, Scroll, Target
+} from 'lucide-react';
+
+// --- 遊戲數據與配置 ---
+
+const CLASSES = {
+  WARRIOR: {
+    id: 'WARRIOR',
+    name: '狂戰士',
+    desc: '攻守兼備，擅長物理爆發',
+    hp: 120,
+    maxHp: 120,
+    mp: 40,
+    maxMp: 40,
+    atk: 18,
+    def: 8,
+    spd: 10,
+    color: 'from-red-500 to-orange-600',
+    icon: Sword,
+    skillName: '裂地猛擊',
+    skillCost: 15,
+    skillDesc: '造成 250% 物理傷害'
+  },
+  MAGE: {
+    id: 'MAGE',
+    name: '元素師',
+    desc: '脆弱但擁有毀滅性魔法',
+    hp: 80,
+    maxHp: 80,
+    mp: 100,
+    maxMp: 100,
+    atk: 25,
+    def: 3,
+    spd: 12,
+    color: 'from-blue-500 to-purple-600',
+    icon: Flame,
+    skillName: '虛空風暴',
+    skillCost: 25,
+    skillDesc: '造成 300% 魔法傷害並無視部分防禦'
+  },
+  ROGUE: {
+    id: 'ROGUE',
+    name: '暗影刺客',
+    desc: '高速度與高暴擊率',
+    hp: 90,
+    maxHp: 90,
+    mp: 60,
+    maxMp: 60,
+    atk: 22,
+    def: 4,
+    spd: 18,
+    color: 'from-emerald-500 to-teal-600',
+    icon: Ghost,
+    skillName: '致命毒刃',
+    skillCost: 20,
+    skillDesc: '造成 200% 傷害，必定暴擊'
+  }
+};
+
+const ENEMIES = [
+  { name: '史萊姆', hp: 50, atk: 12, def: 2, exp: 20, level: 1, icon: Droplets, color: 'text-blue-400' },
+  { name: '荒原狼', hp: 80, atk: 18, def: 5, exp: 35, level: 2, icon:  Zap, color: 'text-yellow-400' },
+  { name: '骷髏戰士', hp: 120, atk: 22, def: 10, exp: 60, level: 4, icon: Skull, color: 'text-gray-400' },
+  { name: '深淵惡魔', hp: 200, atk: 30, def: 15, exp: 120, level: 7, icon: Flame, color: 'text-red-500' },
+  { name: '虛空領主', hp: 500, atk: 45, def: 25, exp: 500, level: 10, icon: Crown, color: 'text-purple-500', isBoss: true },
+];
+
+// --- 輔助組件 ---
+
+const ProgressBar = ({ current, max, colorClass, label, icon: Icon }) => (
+  <div className="w-full mb-2">
+    <div className="flex justify-between items-end mb-1">
+      <div className="flex items-center gap-1 text-xs font-bold uppercase tracking-wider text-white/80">
+        {Icon && <Icon size={12} />}
+        {label}
+      </div>
+      <span className="text-xs font-mono text-white/90">{current}/{max}</span>
+    </div>
+    <div className="h-3 w-full bg-gray-900/50 rounded-full overflow-hidden backdrop-blur-sm border border-white/10">
+      <div 
+        className={`h-full ${colorClass} transition-all duration-500 ease-out relative overflow-hidden`}
+        style={{ width: `${Math.min(100, (current / max) * 100)}%` }}
+      >
+        <div className="absolute inset-0 bg-white/20 animate-pulse"></div>
+      </div>
+    </div>
+  </div>
+);
+
+const FloatingText = ({ text, type, onComplete }) => {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setVisible(false);
+      onComplete();
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [onComplete]);
+
+  if (!visible) return null;
+
+  let color = 'text-white';
+  if (type === 'damage') color = 'text-red-400 text-3xl font-black';
+  if (type === 'heal') color = 'text-green-400 text-2xl font-bold';
+  if (type === 'crit') color = 'text-yellow-400 text-4xl font-black';
+  if (type === 'info') color = 'text-blue-300 text-lg font-medium';
+
+  return (
+    <div className={`absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-50 animate-float-up ${color} drop-shadow-[0_2px_2px_rgba(0,0,0,0.8)]`}>
+      {text}
+    </div>
+  );
+};
+
+// --- 主應用組件 ---
+
+export default function EtherealRealms() {
+  const [gameState, setGameState] = useState('MENU'); // MENU, EXPLORE, BATTLE, VICTORY, GAMEOVER
+  const [player, setPlayer] = useState(null);
+  const [enemy, setEnemy] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [floatingTexts, setFloatingTexts] = useState([]);
+  const [turn, setTurn] = useState('PLAYER'); // PLAYER, ENEMY
+  const logsEndRef = useRef(null);
+
+  // 音效/震動模擬
+  const [shake, setShake] = useState(false);
+  const [flash, setFlash] = useState(false);
+
+  // 自動滾動日誌
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [logs]);
+
+  const addLog = (text, type = 'neutral') => {
+    // 使用 Math.random() 確保即使在同一毫秒內生成多個日誌，ID 也是唯一的
+    setLogs(prev => [...prev, { text, type, id: Date.now() + Math.random() }]);
+  };
+
+  const addFloatingText = (text, type) => {
+    const id = Date.now() + Math.random();
+    setFloatingTexts(prev => [...prev, { id, text, type }]);
+  };
+
+  const triggerShake = () => {
+    setShake(true);
+    setTimeout(() => setShake(false), 500);
+  };
+
+  const triggerFlash = () => {
+    setFlash(true);
+    setTimeout(() => setFlash(false), 300);
+  };
+
+  // --- 遊戲邏輯 ---
+
+  const startGame = (classKey) => {
+    const baseClass = CLASSES[classKey];
+    setPlayer({
+      ...baseClass,
+      lvl: 1,
+      exp: 0,
+      nextLevelExp: 100
+    });
+    setGameState('EXPLORE');
+    setLogs([]);
+    addLog(`歡迎來到虛空之境，${baseClass.name}。旅程開始了。`, 'info');
+  };
+
+  const findEnemy = () => {
+    // 簡單的權重生成敵人
+    const rand = Math.random();
+    let enemyTemplate;
+    
+    // Boss 戰鬥判定 (每 5 等增加機率)
+    if (player.lvl >= 5 && Math.random() > 0.8) {
+       enemyTemplate = ENEMIES[ENEMIES.length - 1]; // Boss
+       addLog('警告：強大的虛空領主出現了！', 'danger');
+    } else {
+       // 根據等級篩選敵人
+       const suitableEnemies = ENEMIES.filter(e => !e.isBoss && e.level <= player.lvl + 1);
+       enemyTemplate = suitableEnemies[Math.floor(Math.random() * suitableEnemies.length)] || ENEMIES[0];
+    }
+
+    // 稍微浮動數值讓戰鬥更多元
+    const variance = 0.9 + Math.random() * 0.2;
+    
+    setEnemy({
+      ...enemyTemplate,
+      maxHp: Math.floor(enemyTemplate.hp * variance),
+      hp: Math.floor(enemyTemplate.hp * variance),
+      atk: Math.floor(enemyTemplate.atk * variance),
+      def: Math.floor(enemyTemplate.def * variance),
+    });
+    setGameState('BATTLE');
+    setTurn('PLAYER');
+    addLog(`遭遇了 Lv.${enemyTemplate.level} ${enemyTemplate.name}！`, 'warning');
+  };
+
+  const handleLevelUp = (currentExp) => {
+    let p = { ...player, exp: currentExp };
+    if (p.exp >= p.nextLevelExp) {
+      p.lvl += 1;
+      p.exp -= p.nextLevelExp;
+      p.nextLevelExp = Math.floor(p.nextLevelExp * 1.5);
+      
+      // 屬性成長
+      p.maxHp += 20;
+      p.hp = p.maxHp;
+      p.maxMp += 10;
+      p.mp = p.maxMp;
+      p.atk += 5;
+      p.def += 2;
+      
+      addLog(`升級了！等級提升至 ${p.lvl}！各項屬性大幅提升！`, 'success');
+      addFloatingText('LEVEL UP!', 'info');
+    }
+    setPlayer(p);
+  };
+
+  const calculateDamage = (attacker, defender, multiplier = 1, isSkill = false) => {
+    let isCrit = false;
+    // 暴擊計算 (基礎 10% + 刺客加成)
+    const critChance = attacker.id === 'ROGUE' || isSkill && attacker.id === 'ROGUE' ? 0.4 : 0.1;
+    if (Math.random() < critChance) isCrit = true;
+
+    let baseDmg = (attacker.atk * multiplier) - (defender.def * 0.5);
+    if (baseDmg < 1) baseDmg = 1;
+    
+    if (isCrit) baseDmg *= 1.5;
+    
+    // 隨機浮動
+    const finalDmg = Math.floor(baseDmg * (0.9 + Math.random() * 0.2));
+    return { damage: finalDmg, isCrit };
+  };
+
+  const playerAttack = (type) => {
+    if (turn !== 'PLAYER') return;
+
+    let multiplier = 1;
+    let cost = 0;
+    
+    if (type === 'SKILL') {
+      if (player.mp < player.skillCost) {
+        addLog('法力不足！無法施放技能。', 'warning');
+        return;
+      }
+      cost = player.skillCost;
+      if (player.id === 'WARRIOR') multiplier = 2.5;
+      if (player.id === 'MAGE') multiplier = 3.0;
+      if (player.id === 'ROGUE') multiplier = 2.0;
+    }
+
+    // 扣除 MP
+    setPlayer(prev => ({ ...prev, mp: prev.mp - cost }));
+
+    // 計算傷害
+    const { damage, isCrit } = calculateDamage(player, enemy, multiplier, type === 'SKILL');
+    
+    // 更新敵人血量
+    const newEnemyHp = Math.max(0, enemy.hp - damage);
+    setEnemy(prev => ({ ...prev, hp: newEnemyHp }));
+    
+    // 視覺與日誌
+    triggerShake();
+    addFloatingText(damage, isCrit ? 'crit' : 'damage');
+    addLog(`你對 ${enemy.name} 造成 ${damage} 點${isCrit ? '暴擊' : ''}傷害！`, 'success');
+
+    if (newEnemyHp <= 0) {
+      // 勝利
+      setTimeout(() => {
+        addLog(`戰鬥勝利！獲得 ${enemy.exp} 經驗值。`, 'success');
+        handleLevelUp(player.exp + enemy.exp);
+        setGameState('EXPLORE');
+        setEnemy(null);
+      }, 1000);
+    } else {
+      setTurn('ENEMY');
+    }
+  };
+
+  const playerRest = () => {
+    if (turn !== 'PLAYER') return;
+    const heal = Math.floor(player.maxHp * 0.15);
+    const mpRecover = Math.floor(player.maxMp * 0.15);
+    
+    setPlayer(prev => ({
+      ...prev,
+      hp: Math.min(prev.maxHp, prev.hp + heal),
+      mp: Math.min(prev.maxMp, prev.mp + mpRecover)
+    }));
+    
+    addFloatingText(`+${heal}`, 'heal');
+    addLog(`你進行防禦態勢，恢復了 ${heal} HP 與 ${mpRecover} MP。`, 'info');
+    setTurn('ENEMY');
+  };
+
+  // 敵人回合 AI
+  useEffect(() => {
+    if (gameState === 'BATTLE' && turn === 'ENEMY' && enemy && enemy.hp > 0) {
+      const timer = setTimeout(() => {
+        // 敵人攻擊
+        const { damage, isCrit } = calculateDamage(enemy, player, 1);
+        
+        setPlayer(prev => ({ ...prev, hp: Math.max(0, prev.hp - damage) }));
+        triggerFlash();
+        addFloatingText(`-${damage}`, 'damage');
+        addLog(`${enemy.name} 攻擊了你，造成 ${damage} 點傷害！`, 'danger');
+
+        if (player.hp - damage <= 0) {
+          setGameState('GAMEOVER');
+        } else {
+          setTurn('PLAYER');
+        }
+      }, 1200); // 模擬思考時間
+      return () => clearTimeout(timer);
+    }
+  }, [turn, gameState, enemy, player]);
+
+  // --- 畫面渲染 ---
+
+  const renderStars = () => (
+    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {[...Array(20)].map((_, i) => (
+        <div 
+          key={i}
+          className="absolute bg-white rounded-full opacity-20 animate-pulse"
+          style={{
+            top: `${Math.random() * 100}%`,
+            left: `${Math.random() * 100}%`,
+            width: `${Math.random() * 3 + 1}px`,
+            height: `${Math.random() * 3 + 1}px`,
+            animationDuration: `${Math.random() * 3 + 2}s`,
+            animationDelay: `${Math.random() * 2}s`
+          }}
+        />
+      ))}
+    </div>
+  );
+
+  // 主選單
+  if (gameState === 'MENU') {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white font-sans selection:bg-purple-500 overflow-hidden relative">
+        {/* 背景動畫 */}
+        <div className="absolute inset-0 bg-gradient-to-br from-gray-900 via-purple-950 to-gray-900 z-0"></div>
+        {renderStars()}
+        
+        <div className="relative z-10 container mx-auto px-4 h-screen flex flex-col justify-center items-center">
+          <div className="mb-12 text-center animate-fade-in-down">
+            <h1 className="text-6xl md:text-8xl font-black text-transparent bg-clip-text bg-gradient-to-r from-purple-300 via-white to-purple-300 tracking-tight drop-shadow-[0_0_15px_rgba(168,85,247,0.5)] mb-4">
+              虛空之境
+            </h1>
+            <p className="text-purple-200/60 text-lg tracking-[0.2em] uppercase">Ethereal Realms</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-5xl">
+            {Object.values(CLASSES).map((cls) => (
+              <button 
+                key={cls.id}
+                onClick={() => startGame(cls.id)}
+                className="group relative h-96 rounded-2xl overflow-hidden border border-white/10 transition-all duration-300 hover:scale-105 hover:shadow-[0_0_30px_rgba(168,85,247,0.3)] bg-gray-800/40 backdrop-blur-md"
+              >
+                {/* 職業卡片背景 */}
+                <div className={`absolute inset-0 bg-gradient-to-b ${cls.color} opacity-0 group-hover:opacity-20 transition-opacity duration-500`}></div>
+                
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
+                  <div className={`w-24 h-24 rounded-full bg-gradient-to-br ${cls.color} flex items-center justify-center mb-6 shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+                    <cls.icon size={48} className="text-white drop-shadow-md" />
+                  </div>
+                  <h2 className="text-3xl font-bold mb-2">{cls.name}</h2>
+                  <p className="text-gray-400 mb-6 h-12 flex items-center justify-center">{cls.desc}</p>
+                  
+                  {/* 屬性預覽 */}
+                  <div className="w-full space-y-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                    <div className="flex justify-between text-sm"><span className="flex items-center gap-1"><Heart size={14}/> 生命</span> <span>{cls.hp}</span></div>
+                    <div className="flex justify-between text-sm"><span className="flex items-center gap-1"><Zap size={14}/> 攻擊</span> <span>{cls.atk}</span></div>
+                    <div className="flex justify-between text-sm"><span className="flex items-center gap-1"><Target size={14}/> 速度</span> <span>{cls.spd}</span></div>
+                  </div>
+                  
+                  <div className="mt-auto pt-6 text-purple-300 text-sm font-bold tracking-widest opacity-0 group-hover:opacity-100 transform translate-y-4 group-hover:translate-y-0 transition-all">
+                    START ADVENTURE
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 遊戲結束
+  if (gameState === 'GAMEOVER') {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center relative overflow-hidden">
+        <div className="absolute inset-0 bg-red-900/20 z-0 animate-pulse"></div>
+        <div className="z-10 text-center p-12 rounded-3xl bg-black/50 backdrop-blur-xl border border-red-900/50 max-w-md w-full mx-4">
+          <Skull size={80} className="mx-auto text-red-600 mb-6 animate-bounce" />
+          <h2 className="text-5xl font-bold text-red-500 mb-4">你失敗了</h2>
+          <p className="text-gray-400 mb-8">虛空吞噬了你的靈魂...</p>
+          <div className="text-sm text-gray-500 mb-8">最終等級: {player.lvl}</div>
+          <button 
+            onClick={() => setGameState('MENU')}
+            className="w-full py-4 bg-red-800 hover:bg-red-700 text-white rounded-xl font-bold transition-all transform hover:scale-105"
+          >
+            輪迴轉生 (重試)
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 遊戲中 (探索 + 戰鬥)
+  return (
+    <div className={`min-h-screen bg-gray-900 text-gray-100 font-sans overflow-hidden flex flex-col relative ${flash ? 'bg-red-900/30' : ''}`}>
+      <style>{`
+        @keyframes float-up {
+          0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+          20% { transform: translate(-50%, -100%) scale(1.2); opacity: 1; }
+          100% { transform: translate(-50%, -250%) scale(1); opacity: 0; }
+        }
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-10px); }
+          75% { transform: translateX(10px); }
+        }
+        .animate-float-up { animation: float-up 1s ease-out forwards; }
+        .animate-shake { animation: shake 0.4s ease-in-out; }
+        
+        /* 自定義滾動條 */
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+      `}</style>
+
+      {/* 動態背景 (根據狀態變化) */}
+      <div className={`absolute inset-0 transition-all duration-1000 z-0 ${gameState === 'BATTLE' ? 'bg-gray-950 scale-105' : 'bg-gradient-to-b from-gray-900 to-indigo-950'}`}>
+        {gameState === 'EXPLORE' && <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>}
+        {gameState === 'BATTLE' && <div className="absolute inset-0 bg-red-900/10 mix-blend-overlay"></div>}
+      </div>
+
+      {/* 頂部 HUD */}
+      <div className="relative z-20 p-4 bg-gray-900/80 backdrop-blur-md border-b border-white/10 flex justify-between items-center shadow-lg">
+        <div className="flex items-center gap-4">
+          <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${CLASSES[player.id].color} flex items-center justify-center shadow-lg`}>
+            {React.createElement(CLASSES[player.id].icon, { size: 24, className: "text-white" })}
+          </div>
+          <div>
+            <div className="flex items-baseline gap-2">
+              <span className="font-bold text-lg text-white">{player.name}</span>
+              <span className="text-xs text-yellow-400 font-mono">Lv.{player.lvl}</span>
+            </div>
+            <div className="w-32 h-1.5 bg-gray-700 rounded-full mt-1 overflow-hidden">
+              <div className="h-full bg-yellow-400" style={{ width: `${(player.exp / player.nextLevelExp) * 100}%` }}></div>
+            </div>
+          </div>
+        </div>
+        
+        <div className="flex gap-6 text-sm font-mono text-gray-300">
+           <div className="flex flex-col items-end">
+             <span className="text-xs text-gray-500 uppercase">HP</span>
+             <span className={player.hp < player.maxHp * 0.3 ? 'text-red-400 animate-pulse' : 'text-green-400'}>
+               {player.hp}/{player.maxHp}
+             </span>
+           </div>
+           <div className="flex flex-col items-end">
+             <span className="text-xs text-gray-500 uppercase">MP</span>
+             <span className="text-blue-400">{player.mp}/{player.maxMp}</span>
+           </div>
+        </div>
+      </div>
+
+      {/* 主要遊戲區域 */}
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center p-4 max-w-4xl mx-auto w-full">
+        
+        {/* 浮動文字層 */}
+        {floatingTexts.map(ft => (
+          <FloatingText key={ft.id} text={ft.text} type={ft.type} onComplete={() => setFloatingTexts(prev => prev.filter(p => p.id !== ft.id))} />
+        ))}
+
+        {gameState === 'EXPLORE' && (
+          <div className="text-center space-y-8 animate-fade-in-up">
+            <div className="w-48 h-48 rounded-full border-4 border-white/5 bg-white/5 flex items-center justify-center mx-auto relative overflow-hidden group">
+               <div className="absolute inset-0 bg-indigo-500/20 blur-xl group-hover:bg-indigo-500/30 transition-all duration-1000"></div>
+               <Sparkles size={64} className="text-indigo-300 opacity-80 animate-pulse" />
+            </div>
+            <div>
+              <h2 className="text-3xl font-bold text-white mb-2">探索深淵</h2>
+              <p className="text-gray-400">前方充滿了未知的危險與寶藏...</p>
+            </div>
+            <button 
+              onClick={findEnemy}
+              className="px-12 py-4 bg-indigo-600 hover:bg-indigo-500 text-white rounded-full font-bold text-xl shadow-[0_0_20px_rgba(79,70,229,0.5)] hover:shadow-[0_0_30px_rgba(79,70,229,0.7)] transition-all transform hover:-translate-y-1 flex items-center gap-3 mx-auto"
+            >
+              <ChevronRight /> 繼續前進
+            </button>
+          </div>
+        )}
+
+        {gameState === 'BATTLE' && enemy && (
+          <div className="w-full flex flex-col gap-8">
+            
+            {/* 戰場區域 */}
+            <div className="flex justify-between items-center w-full px-2 md:px-12 py-8 relative">
+              {/* 玩家狀態 */}
+              <div className={`relative transition-all duration-300 ${turn === 'PLAYER' ? 'scale-110 drop-shadow-[0_0_15px_rgba(255,255,255,0.2)]' : 'opacity-80 scale-95'}`}>
+                 <div className="w-24 h-24 md:w-32 md:h-32 rounded-2xl bg-gray-800 border-2 border-indigo-500/30 flex items-center justify-center shadow-2xl relative overflow-hidden">
+                    <div className={`absolute inset-0 bg-gradient-to-br ${CLASSES[player.id].color} opacity-20`}></div>
+                    {React.createElement(CLASSES[player.id].icon, { size: 48, className: "text-white relative z-10" })}
+                 </div>
+                 {/* 玩家血條小顯示 */}
+                 <div className="absolute -bottom-4 left-0 right-0">
+                    <div className="h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                       <div className="h-full bg-green-500 transition-all" style={{width: `${(player.hp/player.maxHp)*100}%`}}></div>
+                    </div>
+                 </div>
+              </div>
+
+              {/* VS 標誌 */}
+              <div className="text-2xl font-black italic text-white/20">VS</div>
+
+              {/* 敵人狀態 */}
+              <div className={`relative transition-all duration-300 ${shake ? 'animate-shake' : ''} ${turn === 'ENEMY' ? 'scale-110 drop-shadow-[0_0_15px_rgba(239,68,68,0.3)]' : 'opacity-80 scale-95'}`}>
+                 <div className="w-24 h-24 md:w-32 md:h-32 rounded-2xl bg-gray-800 border-2 border-red-500/30 flex items-center justify-center shadow-2xl relative overflow-hidden">
+                    <div className={`absolute inset-0 ${enemy.isBoss ? 'bg-purple-900/50' : 'bg-red-900/20'}`}></div>
+                    {React.createElement(enemy.icon, { size: enemy.isBoss ? 64 : 48, className: `${enemy.color} relative z-10 drop-shadow-lg` })}
+                 </div>
+                 <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 text-center w-40">
+                    <div className="text-red-400 font-bold text-lg drop-shadow-md">{enemy.name}</div>
+                    <div className="text-xs text-gray-500">Lv.{enemy.level}</div>
+                 </div>
+                 {/* 敵人血條 */}
+                 <div className="absolute -bottom-6 left-0 right-0">
+                    <ProgressBar current={enemy.hp} max={enemy.maxHp} colorClass="bg-red-500" label="HP" icon={Heart} />
+                 </div>
+              </div>
+            </div>
+
+            {/* 戰鬥控制台 */}
+            <div className="bg-gray-800/60 backdrop-blur-xl rounded-t-3xl border-t border-white/10 p-6 w-full animate-slide-up">
+               {turn === 'PLAYER' ? (
+                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                   <button 
+                     onClick={() => playerAttack('ATTACK')}
+                     className="group p-4 bg-gray-700/50 hover:bg-gray-600 rounded-xl border border-white/5 transition-all hover:scale-105 flex flex-col items-center justify-center gap-2"
+                   >
+                     <Sword size={24} className="text-gray-300 group-hover:text-white" />
+                     <span className="font-bold text-gray-200">普通攻擊</span>
+                     <span className="text-xs text-gray-500">造成 100% 傷害</span>
+                   </button>
+
+                   <button 
+                     onClick={() => playerAttack('SKILL')}
+                     disabled={player.mp < player.skillCost}
+                     className={`group p-4 rounded-xl border border-white/5 transition-all flex flex-col items-center justify-center gap-2 ${player.mp < player.skillCost ? 'bg-gray-800/50 opacity-50 cursor-not-allowed' : 'bg-indigo-900/40 hover:bg-indigo-800/60 hover:scale-105 border-indigo-500/30'}`}
+                   >
+                     <Sparkles size={24} className={`${player.mp < player.skillCost ? 'text-gray-500' : 'text-indigo-400 group-hover:text-indigo-300'}`} />
+                     <span className="font-bold text-indigo-100">{CLASSES[player.id].skillName}</span>
+                     <span className="text-xs text-indigo-300/70">MP: {CLASSES[player.id].skillCost}</span>
+                   </button>
+
+                   <button 
+                     onClick={playerRest}
+                     className="group col-span-2 md:col-span-1 p-4 bg-emerald-900/30 hover:bg-emerald-800/40 rounded-xl border border-emerald-500/20 transition-all hover:scale-105 flex flex-col items-center justify-center gap-2"
+                   >
+                     <Shield size={24} className="text-emerald-400 group-hover:text-emerald-300" />
+                     <span className="font-bold text-emerald-100">防禦恢復</span>
+                     <span className="text-xs text-emerald-300/70">恢復 HP & MP</span>
+                   </button>
+                 </div>
+               ) : (
+                 <div className="h-28 flex items-center justify-center">
+                    <div className="flex items-center gap-3 text-gray-400 animate-pulse">
+                      <Skull size={20} />
+                      <span className="font-mono text-lg">{enemy.name} 正在準備攻擊...</span>
+                    </div>
+                 </div>
+               )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 底部日誌面板 */}
+      <div className="h-48 md:h-40 bg-black/40 backdrop-blur-sm border-t border-white/5 p-4 overflow-y-auto scrollbar-hide mask-image-linear-gradient">
+        <div className="max-w-4xl mx-auto space-y-1.5">
+          {logs.map((log) => (
+             <div key={log.id} className={`text-sm font-mono ${
+               log.type === 'danger' ? 'text-red-400' : 
+               log.type === 'success' ? 'text-green-400' : 
+               log.type === 'warning' ? 'text-yellow-400' : 
+               log.type === 'info' ? 'text-blue-300' : 'text-gray-400'
+             }`}>
+               <span className="opacity-30 mr-2">[{new Date(Number(String(log.id).split('.')[0])).toLocaleTimeString().slice(0,8)}]</span>
+               {log.text}
+             </div>
+          ))}
+          <div ref={logsEndRef} />
+        </div>
+      </div>
+    </div>
+  );
+}
